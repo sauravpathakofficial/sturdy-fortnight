@@ -72,72 +72,96 @@ Set-Alias organize "python $PWD\organizer.py"
 
 ---
 
+## ⚡ Quick Cheat Sheet
+
+| Goal | Command |
+|---|---|
+| 🚀 **Enable Auto-Organize (Zero-Battery macOS Service)** | `python3 organizer.py ~/Downloads --install-service` |
+| 📜 **View Live Activity Log** | `tail -f ~/.fileorganizer_Downloads.log` |
+| ⏪ **Undo Last Organization** | `python3 organizer.py ~/Downloads --undo` |
+| 🛑 **Turn Off / Uninstall Service** | `python3 organizer.py ~/Downloads --uninstall-service` |
+| 🛡️ **Preview File Moves (Dry-Run)** | `python3 organizer.py ~/Downloads --dry-run` |
+| ⚡ **One-Time Manual Organize** | `python3 organizer.py ~/Downloads` |
+| 👀 **Live Terminal Watcher Mode** | `python3 organizer.py ~/Downloads --watch` |
+| 📋 **List Supported Categories** | `python3 organizer.py --list-categories` |
+
+*(If you set up the optional `organize` alias, you can replace `python3 organizer.py` with `organize`)*
+
+---
+
 ## 📖 Usage Guide & Examples
 
 ### 1. Preview changes first (`--dry-run`)
 Always preview to see which files will move without altering anything:
 ```bash
 # Preview current directory
-organize . --dry-run
+python3 organizer.py . --dry-run
 
 # Preview Downloads folder
-organize ~/Downloads --dry-run
+python3 organizer.py ~/Downloads --dry-run
 ```
 
-### 2. Organize files
+### 2. Organize files manually
 When you're happy with the preview, organize the folder:
 ```bash
 # Organize current directory
-organize .
+python3 organizer.py .
 
 # Organize Downloads folder
-organize ~/Downloads
+python3 organizer.py ~/Downloads
 ```
 
 ### 3. Organize with nested subfolders (`-r` / `--recursive`)
 Include files tucked away inside nested folders:
 ```bash
-organize ~/Downloads -r
+python3 organizer.py ~/Downloads -r
 ```
 
-### 4. Automatic Organization (Real-Time Watch Mode)
-Have files organized **instantly as they land** in your folder:
+### 4. Automatic Organization (Real-Time Terminal Watch Mode)
+Have files organized **instantly as they land** while keeping a terminal open:
 ```bash
 # Watch Downloads folder and sort new files automatically (polls every 5s)
-organize ~/Downloads --watch
+python3 organizer.py ~/Downloads --watch
 
 # Custom check interval (e.g. every 10 seconds)
-organize ~/Downloads --watch --interval 10
+python3 organizer.py ~/Downloads --watch --interval 10
 ```
 > **Smart Settle Detection**: Active downloads (`.crdownload`, `.download`, `.part`, `.tmp`) and files currently being written to are automatically skipped until download/copying is 100% complete.
 
 ### 5. Run Automatically in Background on Mac (`--install-service`)
 Want it to run **permanently on its own without needing an open terminal**, even across restarts?
 Install it as a native macOS LaunchAgent service:
+
 ```bash
 # Set up Downloads folder to auto-organize in the background forever
-organize ~/Downloads --install-service
+python3 organizer.py ~/Downloads --install-service
 ```
-- **Zero Battery & RAM Waste**: Uses Apple's native `WatchPaths` kernel events. The script stays completely turned off (0% CPU, 0 MB RAM) and is only woken up for a split-second when a new file lands, then immediately terminates.
-- Check live activity log anytime:
-  ```bash
-  tail -f ~/.fileorganizer_Downloads.log
-  ```
-- To stop & remove the background service anytime:
-  ```bash
-  organize ~/Downloads --uninstall-service
-  ```
+
+#### Why it's Zero-Battery & Zero-Lag:
+- **0% Idle CPU & 0 MB RAM**: Uses Apple's native `WatchPaths` kernel events. The script stays completely turned off and is only woken up for a split-second when a new file lands, then immediately terminates.
+- **Starts on Boot**: Automatically active whenever you log in or start your Mac.
+- **Auto-Throttle**: Prevents event feedback loops when moving files.
+
+#### How to Monitor Live Activity:
+```bash
+tail -f ~/.fileorganizer_Downloads.log
+```
+
+#### How to Turn Off / Uninstall:
+```bash
+python3 organizer.py ~/Downloads --uninstall-service
+```
 
 ### 6. Undo / Restore files (`--undo`)
 Changed your mind or organized the wrong folder? Instantly revert:
 ```bash
-organize ~/Downloads --undo
+python3 organizer.py ~/Downloads --undo
 ```
 > **Note**: Files return to their exact original locations and any empty category folders created by the script are automatically removed.
 
 ### 7. Check supported categories & extensions
 ```bash
-organize --list-categories
+python3 organizer.py --list-categories
 ```
 
 ---

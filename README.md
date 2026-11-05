@@ -76,13 +76,14 @@ Set-Alias organize "python $PWD\organizer.py"
 
 | Goal | Command |
 |---|---|
-| 🚀 **Enable Auto-Organize (Zero-Battery macOS Service)** | `python3 organizer.py ~/Downloads --install-service` |
-| 📜 **View Live Activity Log** | `tail -f ~/.fileorganizer_Downloads.log` |
+| 🚀 **Start Auto-Organizer in Background** | `python3 organizer.py ~/Downloads --start` |
+| 📊 **Check Auto-Organizer Status** | `python3 organizer.py ~/Downloads --status` |
+| 🛑 **Stop Background Auto-Organizer** | `python3 organizer.py ~/Downloads --stop` |
+| 📜 **View Live Activity Log** | `tail -f ~/.fileorganizer_downloads.log` |
 | ⏪ **Undo Last Organization** | `python3 organizer.py ~/Downloads --undo` |
-| 🛑 **Turn Off / Uninstall Service** | `python3 organizer.py ~/Downloads --uninstall-service` |
 | 🛡️ **Preview File Moves (Dry-Run)** | `python3 organizer.py ~/Downloads --dry-run` |
 | ⚡ **One-Time Manual Organize** | `python3 organizer.py ~/Downloads` |
-| 👀 **Live Terminal Watcher Mode** | `python3 organizer.py ~/Downloads --watch` |
+| 👀 **Live Foreground Watcher Mode** | `python3 organizer.py ~/Downloads --watch` |
 | 📋 **List Supported Categories** | `python3 organizer.py --list-categories` |
 
 *(If you set up the optional `organize` alias, you can replace `python3 organizer.py` with `organize`)*
@@ -117,39 +118,28 @@ Include files tucked away inside nested folders:
 python3 organizer.py ~/Downloads -r
 ```
 
-### 4. Automatic Organization (Real-Time Terminal Watch Mode)
-Have files organized **instantly as they land** while keeping a terminal open:
+### 4. Background Auto-Organizer (`--start`, `--status`, `--stop`)
+Run the organizer automatically in the background. **You can safely close your terminal window** — it will keep running silently:
+
 ```bash
-# Watch Downloads folder and sort new files automatically (polls every 5s)
+# 1. Start watching Downloads in background
+python3 organizer.py ~/Downloads --start
+
+# 2. Check if it's running & see recent activity
+python3 organizer.py ~/Downloads --status
+
+# 3. View live log of organized files
+tail -f ~/.fileorganizer_downloads.log
+
+# 4. Stop the background organizer anytime
+python3 organizer.py ~/Downloads --stop
+```
+> **Smart Download Settle**: Active browser downloads (`.crdownload`, `.download`, `.part`, `.tmp`) are ignored while downloading. Once finished, they are instantly categorized into `PDFs/`, `Images/`, etc.
+
+### 5. Live Foreground Watcher Mode (`--watch`)
+If you prefer watching the live log directly in your terminal:
+```bash
 python3 organizer.py ~/Downloads --watch
-
-# Custom check interval (e.g. every 10 seconds)
-python3 organizer.py ~/Downloads --watch --interval 10
-```
-> **Smart Settle Detection**: Active downloads (`.crdownload`, `.download`, `.part`, `.tmp`) and files currently being written to are automatically skipped until download/copying is 100% complete.
-
-### 5. Run Automatically in Background on Mac (`--install-service`)
-Want it to run **permanently on its own without needing an open terminal**, even across restarts?
-Install it as a native macOS LaunchAgent service:
-
-```bash
-# Set up Downloads folder to auto-organize in the background forever
-python3 organizer.py ~/Downloads --install-service
-```
-
-#### Why it's Zero-Battery & Zero-Lag:
-- **0% Idle CPU & 0 MB RAM**: Uses Apple's native `WatchPaths` kernel events. The script stays completely turned off and is only woken up for a split-second when a new file lands, then immediately terminates.
-- **Starts on Boot**: Automatically active whenever you log in or start your Mac.
-- **Auto-Throttle**: Prevents event feedback loops when moving files.
-
-#### How to Monitor Live Activity:
-```bash
-tail -f ~/.fileorganizer_Downloads.log
-```
-
-#### How to Turn Off / Uninstall:
-```bash
-python3 organizer.py ~/Downloads --uninstall-service
 ```
 
 ### 6. Undo / Restore files (`--undo`)

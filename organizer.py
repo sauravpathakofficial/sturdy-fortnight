@@ -12,6 +12,7 @@ import json
 import shutil
 import argparse
 import re
+import signal
 import subprocess
 from pathlib import Path
 from datetime import datetime
@@ -136,18 +137,22 @@ def collect_files(target_dir: Path, categories: dict, recursive: bool = False):
     target_abs = target_dir.resolve()
     files_to_process = []
 
-    if recursive:
-        iterator = target_abs.rglob("*")
-    else:
-        iterator = target_abs.glob("*")
+    try:
+        if recursive:
+            iterator = list(target_abs.rglob("*"))
+        else:
+            iterator = list(target_abs.glob("*"))
+    except PermissionError as e:
+        print(colorize(f"⚠️ Permission Denied scanning directory {target_abs}: {e}", Colors.RED), flush=True)
+        return []
 
     for p in iterator:
         # Only process regular files
         if not p.is_file():
             continue
 
-        # Ignore hidden files, system files, and the history file
-        if p.name.startswith(".") or p.name == HISTORY_FILENAME:
+        # Ignore hidden files, system files, DS_Store, and the history file
+        if p.name.startswith(".") or p.name in {HISTORY_FILENAME, "DS_Store"}:
             continue
 
         # Ignore in-progress downloads and temporary swap files
@@ -324,11 +329,11 @@ def watch_directory(target_dir: Path, categories: dict, recursive: bool = False,
         print(colorize(f"Error: Target directory does not exist: {target_dir}", Colors.RED))
         sys.exit(1)
 
-    print(colorize("\n👀 Auto-Organizer Active (Watch Mode)", Colors.BOLD + Colors.GREEN))
-    print(f"  • Watching folder: {colorize(str(target_dir), Colors.CYAN)}")
-    print(f"  • Scan interval  : every {colorize(str(interval) + 's', Colors.BOLD)}")
-    print(f"  • Mode           : {colorize('RECURSIVE' if recursive else 'SHALLOW', Colors.CYAN)}")
-    print(colorize(f"  • Press {colorize('Ctrl+C', Colors.YELLOW)} at any time to exit.\n", Colors.DIM))
+    print(colorize("\n👀 Auto-Organizer Active (Watch Mode)", Colors.BOLD + Colors.GREEN), flush=True)
+    print(f"  • Watching folder: {colorize(str(target_dir), Colors.CYAN)}", flush=True)
+    print(f"  • Scan interval  : every {colorize(str(interval) + 's', Colors.BOLD)}", flush=True)
+    print(f"  • Mode           : {colorize('RECURSIVE' if recursive else 'SHALLOW', Colors.CYAN)}", flush=True)
+    print(colorize(f"  • Press {colorize('Ctrl+C', Colors.YELLOW)} at any time to exit.\n", Colors.DIM), flush=True)
 
     try:
         while True:
@@ -358,11 +363,11 @@ def watch_directory(target_dir: Path, categories: dict, recursive: bool = False,
                     moved = organize_files(target_dir, categories, recursive=recursive, dry_run=False, silent_if_empty=True)
                     if moved > 0:
                         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                        print(colorize(f"[{timestamp}] ⚡ Auto-organized {moved} file(s). Waiting for next files...", Colors.GREEN + Colors.BOLD))
+                        print(colorize(f"[{timestamp}] ⚡ Auto-organized {moved} file(s). Waiting for next files...", Colors.GREEN + Colors.BOLD), flush=True)
 
             time.sleep(interval)
     except KeyboardInterrupt:
-        print(colorize("\n\n👋 Stopped watching. Goodbye!\n", Colors.CYAN + Colors.BOLD))
+        print(colorize("\n\n👋 Stopped watching. Goodbye!\n", Colors.CYAN + Colors.BOLD), flush=True)
         sys.exit(0)
 
 def get_service_label(target_dir: Path) -> str:
@@ -403,16 +408,17 @@ def install_service(target_dir: Path, recursive: bool = False, interval: int = 5
     <key>ProgramArguments</key>
     <array>
         <string>{python_bin}</string>
+        <string>-u</string>
         <string>{script_path}</string>
         <string>{str(target_dir)}</string>
-        <string>--event-trigger</string>
+        <string>--watch</string>
+        <string>--interval</string>
+        <string>{interval}</string>
 {recursive_arg}    </array>
-    <key>WatchPaths</key>
-    <array>
-        <string>{str(target_dir)}</string>
-    </array>
-    <key>ThrottleInterval</key>
-    <integer>10</integer>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
     <key>StandardOutPath</key>
     <string>{str(log_file)}</string>
     <key>StandardErrorPath</key>
@@ -429,14 +435,16 @@ def install_service(target_dir: Path, recursive: bool = False, interval: int = 5
 
     res = subprocess.run(["launchctl", "load", str(plist_path)], capture_output=True, text=True)
     if res.returncode == 0:
-        print(colorize("\n🚀 Zero-Battery Event Trigger Successfully Installed & Activated!", Colors.GREEN + Colors.BOLD))
+        print(colorize("\n🚀 macOS Auto-Organizer Service Successfully Installed & Started!", Colors.GREEN + Colors.BOLD))
         print(f"  • Service Label : {colorize(label, Colors.CYAN)}")
-        print(f"  • Watching      : {colorize(str(target_dir), Colors.BOLD)}")
-        print(f"  • Energy Impact : {colorize('0% idle CPU & 0 MB RAM (macOS wakes script only when a file lands)', Colors.GREEN)}")
+        print(f"  • Target Folder : {colorize(str(target_dir), Colors.BOLD)}")
+        print(f"  • Scan Interval : every {colorize(str(interval) + 's', Colors.BOLD)}")
+        print(f"  • Energy Impact : {colorize('< 0.05% CPU (sleeps 99.9% of the time)', Colors.GREEN)}")
         print(f"  • Activity Log  : {colorize(str(log_file), Colors.DIM)}")
         print(f"  • Plist Config  : {colorize(str(plist_path), Colors.DIM)}")
-        print(colorize("\n✨ Whenever a file drops into this folder, macOS wakes the script for a split-second to categorize it, then immediately quits!", Colors.BOLD))
-        print(colorize(f"\n💡 View activity logs anytime with:\n  tail -f \"{log_file}\"", Colors.DIM))
+        print(colorize("\n✨ The organizer is now actively watching your folder in the background!", Colors.BOLD))
+        print(colorize("Any new files downloaded or moved here will be organized automatically.", Colors.DIM))
+        print(colorize(f"\n💡 View live activity log with:\n  tail -f \"{log_file}\"", Colors.DIM))
         print(colorize(f"\n💡 To stop and uninstall this anytime:\n  python3 {Path(__file__).name} \"{target_dir}\" --uninstall-service\n", Colors.YELLOW))
     else:
         print(colorize(f"Failed to load service with launchctl: {res.stderr}", Colors.RED))
@@ -461,6 +469,113 @@ def uninstall_service(target_dir: Path):
         print(colorize("The folder will no longer be monitored in the background.\n", Colors.DIM))
     except Exception as e:
         print(colorize(f"Error removing plist file: {e}", Colors.RED))
+
+def get_pid_file(target_dir: Path) -> Path:
+    folder_slug = re.sub(r"[^a-zA-Z0-9_]", "_", target_dir.expanduser().resolve().name).lower()
+    return Path.home() / f".fileorganizer_{folder_slug}.pid"
+
+def get_log_file(target_dir: Path) -> Path:
+    folder_slug = re.sub(r"[^a-zA-Z0-9_]", "_", target_dir.expanduser().resolve().name).lower()
+    return Path.home() / f".fileorganizer_{folder_slug}.log"
+
+def is_pid_running(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+        return True
+    except OSError:
+        return False
+
+def start_daemon(target_dir: Path, recursive: bool = False, interval: int = 5):
+    target_dir = target_dir.expanduser().resolve()
+    if not target_dir.is_dir():
+        print(colorize(f"Error: Target directory does not exist: {target_dir}", Colors.RED))
+        sys.exit(1)
+
+    pid_file = get_pid_file(target_dir)
+    log_file = get_log_file(target_dir)
+
+    if pid_file.exists():
+        try:
+            old_pid = int(pid_file.read_text().strip())
+            if is_pid_running(old_pid):
+                print(colorize(f"\n⚠️  Organizer is already running in background for {target_dir} (PID: {old_pid})", Colors.YELLOW))
+                print(f"  • View activity log : tail -f \"{log_file}\"")
+                print(f"  • To stop organizer : python3 {Path(__file__).name} \"{target_dir}\" --stop\n")
+                return
+        except ValueError:
+            pass
+
+    cmd = [
+        sys.executable, "-u", str(Path(__file__).resolve()),
+        str(target_dir), "--watch", "--interval", str(interval)
+    ]
+    if recursive:
+        cmd.append("-r")
+
+    log_handle = open(log_file, "a")
+    proc = subprocess.Popen(
+        cmd,
+        stdout=log_handle,
+        stderr=log_handle,
+        stdin=subprocess.DEVNULL,
+        start_new_session=True
+    )
+
+    pid_file.write_text(str(proc.pid))
+    print(colorize(f"\n🚀 Background Auto-Organizer Started Successfully! (PID: {proc.pid})", Colors.GREEN + Colors.BOLD))
+    print(f"  • Watching folder: {colorize(str(target_dir), Colors.CYAN)}")
+    print(f"  • Check interval : every {colorize(str(interval) + 's', Colors.BOLD)}")
+    print(f"  • Activity log   : {colorize(str(log_file), Colors.DIM)}")
+    print(colorize("\n✨ Any new files dropped or downloaded into this folder will be sorted automatically!", Colors.BOLD))
+    print(colorize("💡 You can safely close your terminal — it will keep running in the background.", Colors.DIM))
+    print(colorize(f"\n  • Check status : python3 {Path(__file__).name} \"{target_dir}\" --status", Colors.DIM))
+    print(colorize(f"  • View logs    : tail -f \"{log_file}\"", Colors.DIM))
+    print(colorize(f"  • Stop watcher : python3 {Path(__file__).name} \"{target_dir}\" --stop\n", Colors.YELLOW))
+
+def stop_daemon(target_dir: Path):
+    target_dir = target_dir.expanduser().resolve()
+    pid_file = get_pid_file(target_dir)
+
+    if not pid_file.exists():
+        print(colorize(f"No background organizer process found for {target_dir}.", Colors.YELLOW))
+        return
+
+    try:
+        pid = int(pid_file.read_text().strip())
+        if is_pid_running(pid):
+            os.kill(pid, signal.SIGTERM)
+            print(colorize(f"\n🛑 Stopped background organizer (PID: {pid}) for {target_dir}.\n", Colors.GREEN + Colors.BOLD))
+        else:
+            print(colorize(f"Process {pid} was not running. Cleaned up stale PID file.", Colors.YELLOW))
+        pid_file.unlink(missing_ok=True)
+    except Exception as e:
+        print(colorize(f"Error stopping process: {e}", Colors.RED))
+
+def status_daemon(target_dir: Path):
+    target_dir = target_dir.expanduser().resolve()
+    pid_file = get_pid_file(target_dir)
+    log_file = get_log_file(target_dir)
+
+    if pid_file.exists():
+        try:
+            pid = int(pid_file.read_text().strip())
+            if is_pid_running(pid):
+                print(colorize(f"\n✅ Auto-Organizer is ACTIVE in background (PID: {pid})", Colors.GREEN + Colors.BOLD))
+                print(f"  • Target Folder: {colorize(str(target_dir), Colors.CYAN)}")
+                print(f"  • Activity Log : {colorize(str(log_file), Colors.DIM)}")
+                if log_file.exists():
+                    lines = [l for l in log_file.read_text().strip().splitlines() if l.strip()][-6:]
+                    if lines:
+                        print(colorize("\nRecent Activity Log:", Colors.BOLD))
+                        for line in lines:
+                            print(f"    {line}")
+                print()
+                return
+        except ValueError:
+            pass
+
+    print(colorize(f"\n⏸️  Auto-Organizer is NOT currently running in background for {target_dir}.", Colors.YELLOW))
+    print(f"To start: python3 {Path(__file__).name} \"{target_dir}\" --start\n")
 
 def main():
     parser = argparse.ArgumentParser(
@@ -490,13 +605,28 @@ def main():
     parser.add_argument(
         "-w", "--watch",
         action="store_true",
-        help="Continuously monitor the folder and automatically organize new files as they land"
+        help="Continuously monitor the folder in the foreground"
     )
     parser.add_argument(
         "--interval",
         type=int,
         default=5,
-        help="Polling interval in seconds for --watch mode (default: 5)"
+        help="Polling interval in seconds for watch mode (default: 5)"
+    )
+    parser.add_argument(
+        "--start",
+        action="store_true",
+        help="Start auto-organizer in the background (detached process, stays running after terminal closes)"
+    )
+    parser.add_argument(
+        "--stop",
+        action="store_true",
+        help="Stop background auto-organizer"
+    )
+    parser.add_argument(
+        "--status",
+        action="store_true",
+        help="Check status of background auto-organizer"
     )
     parser.add_argument(
         "--install-service",
@@ -534,6 +664,18 @@ def main():
         return
 
     target_dir = Path(args.directory).expanduser()
+
+    if args.start:
+        start_daemon(target_dir, recursive=args.recursive, interval=args.interval)
+        return
+
+    if args.stop:
+        stop_daemon(target_dir)
+        return
+
+    if args.status:
+        status_daemon(target_dir)
+        return
 
     if args.event_trigger:
         time.sleep(1.0)

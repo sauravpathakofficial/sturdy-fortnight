@@ -7,12 +7,18 @@ with dry-run preview, undo/restore support, recursive sorting, and safe collisio
 
 import os
 import sys
+import time
 import json
 import shutil
 import argparse
+import re
+import subprocess
 from pathlib import Path
 from datetime import datetime
 from collections import defaultdict
+
+# Extensions to ignore during scan (in-progress downloads or temporary editor files)
+INCOMPLETE_EXTENSIONS = {".crdownload", ".download", ".part", ".tmp", ".swp", ".crswap"}
 
 # Default extension to folder mappings
 DEFAULT_CATEGORIES = {
@@ -144,6 +150,11 @@ def collect_files(target_dir: Path, categories: dict, recursive: bool = False):
         if p.name.startswith(".") or p.name == HISTORY_FILENAME:
             continue
 
+        # Ignore in-progress downloads and temporary swap files
+        name_lower = p.name.lower()
+        if any(name_lower.endswith(ext) for ext in INCOMPLETE_EXTENSIONS):
+            continue
+
         # Prevent moving files already located directly within any category directory
         relative_parents = p.resolve().relative_to(target_abs).parts[:-1]
         if any(part in category_folder_names for part in relative_parents):
@@ -153,7 +164,7 @@ def collect_files(target_dir: Path, categories: dict, recursive: bool = False):
 
     return files_to_process
 
-def organize_files(target_dir: Path, categories: dict, recursive: bool = False, dry_run: bool = False):
+def organize_files(target_dir: Path, categories: dict, recursive: bool = False, dry_run: bool = False, silent_if_empty: bool = False) -> int:
     target_dir = target_dir.resolve()
     if not target_dir.is_dir():
         print(colorize(f"Error: Target directory does not exist: {target_dir}", Colors.RED))
@@ -163,8 +174,9 @@ def organize_files(target_dir: Path, categories: dict, recursive: bool = False, 
     files = collect_files(target_dir, categories, recursive=recursive)
 
     if not files:
-        print(colorize("No loose or unorganized files found to categorize.", Colors.YELLOW))
-        return
+        if not silent_if_empty:
+            print(colorize("No loose or unorganized files found to categorize.", Colors.YELLOW))
+        return 0
 
     # Plan moves
     planned_moves = []
@@ -211,7 +223,7 @@ def organize_files(target_dir: Path, categories: dict, recursive: bool = False, 
             if len(unmatched_files) > 10:
                 print(f"  ... and {len(unmatched_files) - 10} more.")
         print(colorize("\n✨ Dry run complete. Run without --dry-run to apply changes.", Colors.BOLD))
-        return
+        return len(planned_moves)
 
     # Live Execution
     executed_ops = []
@@ -242,8 +254,10 @@ def organize_files(target_dir: Path, categories: dict, recursive: bool = False, 
         print(colorize(f"\n🎉 Successfully organized {len(executed_ops)} file(s)!", Colors.GREEN + Colors.BOLD))
         print(colorize(f"💡 You can undo this operation anytime by running: python3 organizer.py \"{target_dir}\" --undo\n", Colors.DIM))
 
+    return len(executed_ops)
+
 def undo_last_operation(target_dir: Path):
-    target_dir = target_dir.resolve()
+    target_dir = target_dir.expanduser().resolve()
     history = load_history(target_dir)
 
     if not history:
@@ -304,9 +318,153 @@ def list_categories(categories):
         print(f"  {colorize(folder.ljust(15), Colors.CYAN)} : {ext_list}")
     print()
 
+def watch_directory(target_dir: Path, categories: dict, recursive: bool = False, interval: int = 5):
+    target_dir = target_dir.expanduser().resolve()
+    if not target_dir.is_dir():
+        print(colorize(f"Error: Target directory does not exist: {target_dir}", Colors.RED))
+        sys.exit(1)
+
+    print(colorize("\n👀 Auto-Organizer Active (Watch Mode)", Colors.BOLD + Colors.GREEN))
+    print(f"  • Watching folder: {colorize(str(target_dir), Colors.CYAN)}")
+    print(f"  • Scan interval  : every {colorize(str(interval) + 's', Colors.BOLD)}")
+    print(f"  • Mode           : {colorize('RECURSIVE' if recursive else 'SHALLOW', Colors.CYAN)}")
+    print(colorize(f"  • Press {colorize('Ctrl+C', Colors.YELLOW)} at any time to exit.\n", Colors.DIM))
+
+    try:
+        while True:
+            # Check for candidate files
+            files = collect_files(target_dir, categories, recursive=recursive)
+            if files:
+                # Settle check: ensure files aren't actively being downloaded or written to
+                initial_sizes = {}
+                for f in files:
+                    try:
+                        initial_sizes[f] = f.stat().st_size
+                    except (FileNotFoundError, PermissionError):
+                        pass
+
+                # Short wait to detect changes in byte size
+                time.sleep(1.5)
+
+                ready_files = []
+                for f, prev_size in initial_sizes.items():
+                    try:
+                        if f.exists() and f.stat().st_size == prev_size:
+                            ready_files.append(f)
+                    except (FileNotFoundError, PermissionError):
+                        pass
+
+                if ready_files:
+                    moved = organize_files(target_dir, categories, recursive=recursive, dry_run=False, silent_if_empty=True)
+                    if moved > 0:
+                        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                        print(colorize(f"[{timestamp}] ⚡ Auto-organized {moved} file(s). Waiting for next files...", Colors.GREEN + Colors.BOLD))
+
+            time.sleep(interval)
+    except KeyboardInterrupt:
+        print(colorize("\n\n👋 Stopped watching. Goodbye!\n", Colors.CYAN + Colors.BOLD))
+        sys.exit(0)
+
+def get_service_label(target_dir: Path) -> str:
+    target_abs = target_dir.expanduser().resolve()
+    folder_slug = re.sub(r"[^a-zA-Z0-9_]", "_", target_abs.name).lower()
+    return f"com.fileorganizer.{folder_slug}"
+
+def get_plist_path(label: str) -> Path:
+    launch_agents = Path.home() / "Library" / "LaunchAgents"
+    launch_agents.mkdir(parents=True, exist_ok=True)
+    return launch_agents / f"{label}.plist"
+
+def install_service(target_dir: Path, recursive: bool = False, interval: int = 5):
+    if sys.platform != "darwin":
+        print(colorize("Auto-start service install is currently configured for macOS launchd.", Colors.YELLOW))
+        print("For Linux, consider setting up a systemd user service or crontab.")
+        return
+
+    target_dir = target_dir.expanduser().resolve()
+    if not target_dir.is_dir():
+        print(colorize(f"Error: Target directory does not exist: {target_dir}", Colors.RED))
+        sys.exit(1)
+
+    label = get_service_label(target_dir)
+    plist_path = get_plist_path(label)
+    python_bin = sys.executable
+    script_path = str(Path(__file__).resolve())
+    log_file = Path.home() / f".fileorganizer_{target_dir.name}.log"
+
+    recursive_arg = "        <string>-r</string>\n" if recursive else ""
+
+    plist_content = f"""<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>{label}</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>{python_bin}</string>
+        <string>{script_path}</string>
+        <string>{str(target_dir)}</string>
+        <string>--event-trigger</string>
+{recursive_arg}    </array>
+    <key>WatchPaths</key>
+    <array>
+        <string>{str(target_dir)}</string>
+    </array>
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+    <key>StandardOutPath</key>
+    <string>{str(log_file)}</string>
+    <key>StandardErrorPath</key>
+    <string>{str(log_file)}</string>
+</dict>
+</plist>
+"""
+    # Unload first if previously active
+    if plist_path.exists():
+        subprocess.run(["launchctl", "unload", str(plist_path)], capture_output=True)
+
+    with open(plist_path, "w", encoding="utf-8") as f:
+        f.write(plist_content.strip() + "\n")
+
+    res = subprocess.run(["launchctl", "load", str(plist_path)], capture_output=True, text=True)
+    if res.returncode == 0:
+        print(colorize("\n🚀 Zero-Battery Event Trigger Successfully Installed & Activated!", Colors.GREEN + Colors.BOLD))
+        print(f"  • Service Label : {colorize(label, Colors.CYAN)}")
+        print(f"  • Watching      : {colorize(str(target_dir), Colors.BOLD)}")
+        print(f"  • Energy Impact : {colorize('0% idle CPU & 0 MB RAM (macOS wakes script only when a file lands)', Colors.GREEN)}")
+        print(f"  • Activity Log  : {colorize(str(log_file), Colors.DIM)}")
+        print(f"  • Plist Config  : {colorize(str(plist_path), Colors.DIM)}")
+        print(colorize("\n✨ Whenever a file drops into this folder, macOS wakes the script for a split-second to categorize it, then immediately quits!", Colors.BOLD))
+        print(colorize(f"\n💡 View activity logs anytime with:\n  tail -f \"{log_file}\"", Colors.DIM))
+        print(colorize(f"\n💡 To stop and uninstall this anytime:\n  python3 {Path(__file__).name} \"{target_dir}\" --uninstall-service\n", Colors.YELLOW))
+    else:
+        print(colorize(f"Failed to load service with launchctl: {res.stderr}", Colors.RED))
+
+def uninstall_service(target_dir: Path):
+    if sys.platform != "darwin":
+        print(colorize("Service uninstall is configured for macOS launchd.", Colors.YELLOW))
+        return
+
+    target_dir = target_dir.expanduser().resolve()
+    label = get_service_label(target_dir)
+    plist_path = get_plist_path(label)
+
+    if not plist_path.exists():
+        print(colorize(f"No background service found for {target_dir} ({plist_path.name} not found).", Colors.YELLOW))
+        return
+
+    subprocess.run(["launchctl", "unload", str(plist_path)], capture_output=True)
+    try:
+        plist_path.unlink()
+        print(colorize(f"\n🛑 Successfully stopped and removed background service: {label}", Colors.GREEN + Colors.BOLD))
+        print(colorize("The folder will no longer be monitored in the background.\n", Colors.DIM))
+    except Exception as e:
+        print(colorize(f"Error removing plist file: {e}", Colors.RED))
+
 def main():
     parser = argparse.ArgumentParser(
-        description="Smart File Organizer: Categorize files into organized folders with preview and undo support."
+        description="Smart File Organizer: Categorize files into organized folders with preview, undo, and real-time auto-watch."
     )
     parser.add_argument(
         "directory",
@@ -330,6 +488,32 @@ def main():
         help="Undo the last organization operation in the target directory"
     )
     parser.add_argument(
+        "-w", "--watch",
+        action="store_true",
+        help="Continuously monitor the folder and automatically organize new files as they land"
+    )
+    parser.add_argument(
+        "--interval",
+        type=int,
+        default=5,
+        help="Polling interval in seconds for --watch mode (default: 5)"
+    )
+    parser.add_argument(
+        "--install-service",
+        action="store_true",
+        help="Install & start a persistent macOS background LaunchAgent (auto-runs on boot/login)"
+    )
+    parser.add_argument(
+        "--uninstall-service",
+        action="store_true",
+        help="Stop and remove the persistent macOS background LaunchAgent"
+    )
+    parser.add_argument(
+        "--event-trigger",
+        action="store_true",
+        help=argparse.SUPPRESS
+    )
+    parser.add_argument(
         "--config",
         type=str,
         default=None,
@@ -349,10 +533,28 @@ def main():
         list_categories(categories)
         return
 
-    target_dir = Path(args.directory)
+    target_dir = Path(args.directory).expanduser()
+
+    if args.event_trigger:
+        time.sleep(1.0)
+        moved = organize_files(target_dir, categories, recursive=args.recursive, dry_run=False, silent_if_empty=True)
+        if moved > 0:
+            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            print(colorize(f"[{timestamp}] ⚡ Auto-organized {moved} file(s) via macOS event trigger.", Colors.GREEN))
+        return
+
+    if args.install_service:
+        install_service(target_dir, recursive=args.recursive, interval=args.interval)
+        return
+
+    if args.uninstall_service:
+        uninstall_service(target_dir)
+        return
 
     if args.undo:
         undo_last_operation(target_dir)
+    elif args.watch:
+        watch_directory(target_dir, categories, recursive=args.recursive, interval=args.interval)
     else:
         organize_files(target_dir, categories, recursive=args.recursive, dry_run=args.dry_run)
 
